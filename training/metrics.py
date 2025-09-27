@@ -1,32 +1,23 @@
-import torch
 import numpy as np
 from sklearn.metrics import matthews_corrcoef
 
 def calculate_mcc(predictions, targets):
     """Calculate Matthews Correlation Coefficient"""
-    pred_flat = np.array(predictions).flatten()
-    target_flat = np.array(targets).flatten()
-    
-    # Ensure binary values
-    pred_flat = (pred_flat > 0.5).astype(np.int32)
-    target_flat = (target_flat > 0.5).astype(np.int32)
-    
-    return matthews_corrcoef(target_flat, pred_flat)
+    return matthews_corrcoef(targets.flatten(), predictions.flatten())
 
 def calculate_iou(predictions, targets):
     """Calculate Intersection over Union"""
-    predictions = (predictions > 0.5).float()
-    targets = targets.float()
-    
-    intersection = (predictions * targets).sum()
-    union = predictions.sum() + targets.sum() - intersection
-    
-    return (intersection + 1e-6) / (union + 1e-6)
+    intersection = np.logical_and(predictions, targets).sum()
+    union = np.logical_or(predictions, targets).sum()
+    return intersection / union if union != 0 else 0
 
-def calculate_dice(predictions, targets):
-    """Calculate Dice Coefficient"""
-    predictions = (predictions > 0.5).float()
-    targets = targets.float()
+def calculate_precision_recall(predictions, targets):
+    """Calculate precision and recall"""
+    tp = np.logical_and(predictions == 1, targets == 1).sum()
+    fp = np.logical_and(predictions == 1, targets == 0).sum()
+    fn = np.logical_and(predictions == 0, targets == 1).sum()
     
-    intersection = (predictions * targets).sum()
-    return (2. * intersection + 1e-6) / (predictions.sum() + targets.sum() + 1e-6)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    
+    return precision, recall

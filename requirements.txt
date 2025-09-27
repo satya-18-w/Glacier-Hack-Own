@@ -2,13 +2,12 @@ torch>=1.9.0
 torchvision>=0.10.0
 segmentation-models-pytorch>=0.2.0
 albumentations>=1.0.0
-rasterio>=1.2.0
-numpy>=1.21.0
-scikit-learn>=1.0.0
 optuna>=2.10.0
-tensorboard>=2.7.0
-PyYAML>=6.0
-matplotlib>=3.5.0
+rasterio>=1.2.0
 opencv-python>=4.5.0
+scikit-learn>=0.24.0
+matplotlib>=3.3.0
+numpy>=1.19.0
+tqdm>=4.60.0
 ipykernel
 -e .

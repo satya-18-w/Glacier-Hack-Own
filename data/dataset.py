@@ -1,97 +1,86 @@
 import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import rasterio
-from sklearn.model_selection import train_test_split
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
+from PIL import Image
+import cv2
 
 class GlacierDataset(Dataset):
-    def __init__(self, image_paths, mask_paths, transform=None, is_train=True):
-        self.image_paths = image_paths
-        self.mask_paths = mask_paths
+    def __init__(self, root_dir, bands, label_dir, transform=None, image_size=(256, 256)):
+        self.root_dir = root_dir
+        self.bands = bands
+        self.label_dir = label_dir
         self.transform = transform
-        self.is_train = is_train
-        
+        self.image_size = image_size
+        self.samples = self._load_samples()
+    
+    def _load_samples(self):
+        """Load all sample names from the first band directory"""
+        band1_dir = os.path.join(self.root_dir, self.bands[0])
+        samples = [f for f in os.listdir(band1_dir) if f.endswith(('.tif', '.tiff', '.png', '.jpg'))]
+        return samples
+    
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.samples)
+    
+    def _load_band(self, band_path):
+        """Load individual band with proper error handling"""
+        try:
+            if band_path.endswith(('.tif', '.tiff')):
+                with rasterio.open(band_path) as src:
+                    band_data = src.read(1)
+            else:
+                band_data = cv2.imread(band_path, cv2.IMREAD_GRAYSCALE)
+            
+            # Resize if necessary
+            if band_data.shape != self.image_size:
+                band_data = cv2.resize(band_data, self.image_size, interpolation=cv2.INTER_LINEAR)
+            
+            return band_data
+        except Exception as e:
+            print(f"Error loading {band_path}: {e}")
+            return np.zeros(self.image_size, dtype=np.float32)
     
     def __getitem__(self, idx):
-        # Load multispectral image (5 channels)
-        with rasterio.open(self.image_paths[idx]) as img:
-            image = img.read()  # Shape: (5, H, W)
-            image = image.astype(np.float32)
+        sample_name = self.samples[idx]
         
-        # Load mask
-        with rasterio.open(self.mask_paths[idx]) as mask:
-            mask_data = mask.read(1)  # Shape: (H, W)
-            mask_data = (mask_data > 0).astype(np.float32)  # Binary mask
+        # Load all bands
+        band_images = []
+        for band in self.bands:
+            band_path = os.path.join(self.root_dir, band, sample_name)
+            band_data = self._load_band(band_path)
+            band_images.append(band_data)
+        
+        # Stack bands to create 5-channel image
+        image = np.stack(band_images, axis=0)  # Shape: (5, H, W)
+        image = image.astype(np.float32)
+        
+        # Normalize each band
+        for i in range(image.shape[0]):
+            if np.max(image[i]) > 0:
+                image[i] = (image[i] - np.min(image[i])) / (np.max(image[i]) - np.min(image[i]))
+        
+        # Load label
+        label_path = os.path.join(self.root_dir, self.label_dir, sample_name)
+        try:
+            if label_path.endswith(('.tif', '.tiff')):
+                with rasterio.open(label_path) as src:
+                    label = src.read(1)
+            else:
+                label = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)
+            
+            if label.shape != self.image_size:
+                label = cv2.resize(label, self.image_size, interpolation=cv2.INTER_NEAREST)
+            
+            label = (label > 0).astype(np.float32)  # Binarize
+        except:
+            label = np.zeros(self.image_size, dtype=np.float32)
         
         # Apply transformations
         if self.transform:
-            transformed = self.transform(image=image.transpose(1, 2, 0), 
-                                       mask=mask_data)
-            image = transformed['image']
-            mask = transformed['mask']
-        else:
-            image = torch.from_numpy(image)
-            mask = torch.from_numpy(mask_data)
-            
-        return image, mask.unsqueeze(0)
-
-class DataLoaderFactory:
-    def __init__(self, config):
-        self.config = config
-        self.transform = self._get_transforms()
+            augmented = self.transform(image=image.transpose(1, 2, 0), mask=label)
+            image = augmented['image'].transpose(2, 0, 1)
+            label = augmented['mask']
         
-    def _get_transforms(self):
-        train_transform = A.Compose([
-            A.Resize(self.config['data']['image_size'][0], 
-                    self.config['data']['image_size'][1]),
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.RandomRotate90(p=0.5),
-            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, 
-                              rotate_limit=15, p=0.5),
-            A.Normalize(mean=[0.0]*5, std=[1.0]*5),  # Adjust based on data
-            ToTensorV2(),
-        ])
-        
-        val_transform = A.Compose([
-            A.Resize(self.config['data']['image_size'][0],
-                    self.config['data']['image_size'][1]),
-            A.Normalize(mean=[0.0]*5, std=[1.0]*5),
-            ToTensorV2(),
-        ])
-        
-        return {'train': train_transform, 'val': val_transform}
-    
-    def create_loaders(self, data_dir):
-        # Assuming structure: data_dir/images/*.tif, data_dir/masks/*.tif
-        image_paths = sorted([os.path.join(data_dir, 'images', f) 
-                            for f in os.listdir(os.path.join(data_dir, 'images')) 
-                            if f.endswith('.tif')])
-        mask_paths = sorted([os.path.join(data_dir, 'masks', f) 
-                           for f in os.listdir(os.path.join(data_dir, 'masks')) 
-                           if f.endswith('.tif')])
-        
-        train_img, val_img, train_mask, val_mask = train_test_split(
-            image_paths, mask_paths, 
-            test_size=self.config['data']['val_split'],
-            random_state=42
-        )
-        
-        train_dataset = GlacierDataset(train_img, train_mask, 
-                                     self.transform['train'], is_train=True)
-        val_dataset = GlacierDataset(val_img, val_mask, 
-                                   self.transform['val'], is_train=False)
-        
-        train_loader = DataLoader(train_dataset, 
-                                batch_size=self.config['data']['batch_size'],
-                                shuffle=True, num_workers=4)
-        val_loader = DataLoader(val_dataset, 
-                              batch_size=self.config['data']['batch_size'],
-                              shuffle=False, num_workers=4)
-        
-        return train_loader, val_loader
+        return torch.from_numpy(image), torch.from_numpy(label).unsqueeze(0)

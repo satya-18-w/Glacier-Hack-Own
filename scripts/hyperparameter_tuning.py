@@ -1,64 +1,68 @@
 import optuna
 import torch
-import yaml
-from data.dataset import DataLoaderFactory
-from models.model_factory import ModelFactory
-from models.losses import CombinedLoss, FocalLoss, DiceLoss
+from torch.utils.data import DataLoader, Subset
+from data.dataset import GlacierDataset
+from data.transforms import get_train_transforms, get_val_transforms
+from data.utils import split_dataset
+from models.model_factory import create_model
+from models.losses import get_loss
 from training.trainer import GlacierTrainer
-from training.optimizer import get_optimizer, get_scheduler
+from training.optimizer import get_optimizer
 
 def objective(trial):
     # Suggest hyperparameters
-    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
+    lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
     batch_size = trial.suggest_categorical('batch_size', [8, 16, 32])
-    model_name = trial.suggest_categorical('model_name', 
-                                          ['unet', 'attention_unet', 'deeplabv3', 'fpn'])
     optimizer_name = trial.suggest_categorical('optimizer', ['adam', 'adamw', 'sgd'])
-    loss_fn = trial.suggest_categorical('loss_fn', ['bce', 'dice', 'combined', 'focal'])
+    model_name = trial.suggest_categorical('model', ['unet', 'attention_unet', 'deeplabv3plus'])
+    loss_name = trial.suggest_categorical('loss', ['bce', 'dice', 'bce_dice', 'focal'])
     
-    # Update config
-    config['data']['batch_size'] = batch_size
-    config['model']['name'] = model_name
-    config['training']['learning_rate'] = lr
+    # Create dataset
+    dataset = GlacierDataset(
+        root_dir='/kaggle/input/glacer/Train',
+        bands=['Band1', 'Band2', 'Band3', 'Band4', 'Band5'],
+        label_dir='label',
+        transform=get_train_transforms(),
+        image_size=(256, 256)
+    )
     
-    # Create data loaders
-    loader_factory = DataLoaderFactory(config)
-    train_loader, val_loader = loader_factory.create_loaders(config['paths']['data_dir'])
+    train_idx, val_idx = split_dataset(dataset)
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Create model
-    model_config = MODEL_CONFIGS[model_name]
-    model_config.input_channels = config['data']['channels']
-    model = ModelFactory.create_model(model_config)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = create_model(model_name, {'in_channels': 5, 'classes': 1})
     model = model.to(device)
     
-    # Create loss function
-    if loss_fn == 'bce':
-        criterion = torch.nn.BCEWithLogitsLoss()
-    elif loss_fn == 'dice':
-        criterion = DiceLoss()
-    elif loss_fn == 'combined':
-        criterion = CombinedLoss()
-    elif loss_fn == 'focal':
-        criterion = FocalLoss()
+    # Create loss and optimizer
+    loss_fn = get_loss(loss_name)
+    optimizer = get_optimizer(optimizer_name, model.parameters(), lr)
     
-    # Create optimizer and scheduler
-    optimizer = get_optimizer(model, optimizer_name, lr)
-    scheduler = get_scheduler(optimizer, 'reduce_lr')
+    # Train for a few epochs
+    trainer = GlacierTrainer(model, optimizer, loss_fn, device)
     
-    # Train model
-    trainer = GlacierTrainer(model, train_loader, val_loader, criterion,
-                           optimizer, scheduler, device, config)
-    trainer.train()
+    best_mcc = 0
+    for epoch in range(10):  # Short training for tuning
+        trainer.train_epoch(train_loader)
+        _, val_mcc = trainer.validate_epoch(val_loader)
+        
+        if val_mcc > best_mcc:
+            best_mcc = val_mcc
+        
+        trial.report(val_mcc, epoch)
+        
+        if trial.should_prune():
+            raise optuna.TrialPruned()
     
-    return trainer.best_mcc
+    return best_mcc
 
-def run_hyperparameter_tuning(config_path):
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
+def main():
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=config['hyperparameter_tuning']['n_trials'],
-                  timeout=config['hyperparameter_tuning']['timeout'])
+    study.optimize(objective, n_trials=50, timeout=3600)
     
     print("Best trial:")
     trial = study.best_trial
@@ -66,9 +70,6 @@ def run_hyperparameter_tuning(config_path):
     print("  Params: ")
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
-    
-    return study.best_params
 
 if __name__ == "__main__":
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    best_params = run_hyperparameter_tuning('config/config.yaml')
+    main()
