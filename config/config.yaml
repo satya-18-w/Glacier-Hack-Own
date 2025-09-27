@@ -1,0 +1,28 @@
+data:
+  image_size: [256, 256]
+  channels: 5
+  batch_size: 16
+  train_split: 0.8
+  val_split: 0.2
+  spectral_bands: ['B2', 'B3', 'B4', 'B6', 'B10']
+
+model:
+  name: 'unet'
+  encoder: 'resnet34'
+  encoder_weights: 'imagenet'
+  activation: 'sigmoid'
+
+training:
+  epochs: 100
+  learning_rate: 0.001
+  patience: 10
+  min_delta: 0.001
+
+hyperparameter_tuning:
+  n_trials: 50
+  timeout: 3600
+
+paths:
+  data_dir: './data'
+  model_dir: './models'
+  logs_dir: './logs'
