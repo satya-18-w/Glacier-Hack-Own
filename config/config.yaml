@@ -1,27 +1,25 @@
-# Model Configuration
-model:
-  name: "unet"  # Options: unet, attention_unet, deeplabv3plus
-  in_channels: 5
-  out_channels: 1
-  encoder_name: "resnet34"  # For segmentation models
-  encoder_weights: "imagenet"
-
-# Training Configuration
-training:
-  batch_size: 16
-  epochs: 100
-  learning_rate: 0.001
-  optimizer: "adam"
-  loss: "bce_dice"  # Options: bce, dice, bce_dice, focal
-  patience: 10
-
-# Data Configuration
 data:
   image_size: [256, 256]
+  channels: 5
+  batch_size: 8  # Reduced for memory
   train_split: 0.8
-  augmentation: true
+  val_split: 0.2
+  spectral_bands: ['Band1', 'Band2', 'Band3', 'Band4', 'Band5']
 
-# Hyperparameter Tuning
-tuning:
-  n_trials: 50
-  timeout: 3600  # 1 hour
+model:
+  name: 'unet'
+  encoder: 'resnet34'
+  encoder_weights: None  # Train from scratch
+  activation: 'sigmoid'
+
+training:
+  epochs: 50
+  learning_rate: 0.001
+  patience: 10
+  min_delta: 0.001
+  use_amp: true
+
+paths:
+  data_dir: 'C:/Users/Satyajit Samal/OneDrive/Desktop/Glacier/Glacier-Hack-Own/data'
+  model_dir: 'C:/Users/Satyajit Samal/OneDrive/Desktop/Glacier/Glacier-Hack-Own/models'
+  logs_dir: 'C:/Users/Satyajit Samal/OneDrive/Desktop/Glacier/Glacier-Hack-Own/logs'
